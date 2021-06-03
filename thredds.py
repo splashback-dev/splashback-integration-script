@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 from typing import Union
+from typing.io import IO
 from xml.etree import ElementTree
 
 import requests
@@ -128,15 +129,14 @@ class ThreddsCatalog(ThreddsServerAccessor):
             dataset_size_units = dataset_xml.find('dataSize', namespaces=namespaces).get('units')
             dataset_date = datetime.fromisoformat(dataset_xml.find('date', namespaces=namespaces).text[0:-1])
             self._datasets.append(
-                ThreddsDataset(self.server, dataset_id, self, dataset_size, dataset_size_units, dataset_date))
+                ThreddsDataset(self.server, dataset_id, dataset_size, dataset_size_units, dataset_date))
 
 
 class ThreddsDataset(ThreddsServerAccessor):
-    def __init__(self, server: ThreddsServer, dataset_id: str, catalog: ThreddsCatalog, size: float, size_units: str,
-                 date: datetime):
+    def __init__(self, server: ThreddsServer, dataset_id: str, size: float = 0., size_units: str = '',
+                 date: datetime = None):
         super().__init__(server)
         self._id = dataset_id
-        self._catalog = catalog
         self._size = size
         self._size_units = size_units
         self._date = date
@@ -144,10 +144,6 @@ class ThreddsDataset(ThreddsServerAccessor):
     @property
     def id(self) -> str:
         return self._id
-
-    @property
-    def catalog(self) -> ThreddsCatalog:
-        return self._catalog
 
     @property
     def size(self) -> float:
@@ -161,11 +157,10 @@ class ThreddsDataset(ThreddsServerAccessor):
     def date(self) -> datetime:
         return self._date
 
-    def download(self, service: ThreddsService) -> str:
+    def download(self, service: ThreddsService) -> IO:
+        file = NamedTemporaryFile()
         with requests.get(self.server.host + service.base + self.id, stream=True) as r:
             r.raise_for_status()
-            with NamedTemporaryFile() as f:
-                file_name = f.name
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        return file_name
+            for chunk in r.iter_content(chunk_size=8192):
+                file.write(chunk)
+        return file
