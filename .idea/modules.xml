@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/aodn-integration.iml" filepath="$PROJECT_DIR$/.idea/aodn-integration.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../thredds-integration/.idea/thredds-integration.iml" filepath="$PROJECT_DIR$/../thredds-integration/.idea/thredds-integration.iml" />
     </modules>
   </component>
 </project>
