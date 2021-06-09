@@ -1,0 +1,60 @@
+{
+  "@@dataset_id": "IMOS/ANMN/NRS/NRSYON/Biogeochem_profiles/IMOS_ANMN-NRS_CDEST_20120615T005204Z_NRSYON_FV01_Profile-SBE19_C-20150415T003155Z.nc",
+  "templates": {
+    "import": {
+      "site_name": "",
+      "site_code": "ATTR site_code",
+      "date": "VAR TIME !datetime:days_since_1950:json",
+      "time": "",
+      "taken_by": "ATTR author",
+      "comment": "",
+      "program": "ATTR station",
+      "variant_type": "CONST depth",
+      "variant_date_time": "",
+      "variant_value": "VAR DEPTH",
+      "variant_comment": "",
+      "parameter": "PARAM name",
+      "qualifier": "",
+      "value": "PARAM value",
+      "quality": "CONST nr",
+      "laboratory": "CONST field",
+      "sampling_method": "ATTR instrument"
+    },
+    "site": {
+      "name": "FIELD site_code",
+      "location": "FIELD site_code",
+      "latitude": "ATTR geospatial_lat_min !float",
+      "longitude": "ATTR geospatial_lon_min !float"
+    },
+    "program": {
+      "name": "FIELD program"
+    },
+    "variant_type": {
+      "name": "FIELD variant_type",
+      "unit": "VARATTR DEPTH units"
+    },
+    "parameter": {
+      "name": "VARATTR (FIELD parameter) standard_name !str:50 | FIELD parameter",
+      "short_name": "FIELD parameter",
+      "unit": "VARATTR (FIELD parameter) units"
+    },
+    "laboratory": {
+      "name": "FIELD laboratory"
+    },
+    "sampling_method": {
+      "name": "FIELD sampling_method"
+    },
+    "quality": {
+      "name": "FIELD quality"
+    }
+  },
+  "parameters": [
+    "TEMP",
+    "PSAL",
+    "CNDC",
+    "CPHL",
+    "DESC",
+    "DENS",
+    "PAR"
+  ]
+}

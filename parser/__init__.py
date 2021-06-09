@@ -1,6 +1,6 @@
 from argparse import Namespace
+from pathlib import Path
 from typing import List, Set, Dict, Tuple
-from typing.io import IO
 
 from splashback_data.model.import_results import ImportResults
 from splashback_data.model.laboratory_object import LaboratoryObject
@@ -106,8 +106,8 @@ class ParsedMetadata:
 
 
 class BaseParser:
-    def __init__(self, file: IO):
-        self._file = file
+    def __init__(self, path: Path):
+        self._path: Path = path
         self._imports: List[ModelImport] = []
 
     def start_interactive(self) -> List[ModelImport]:

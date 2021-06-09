@@ -86,15 +86,13 @@ class SplashbackImporter:
     def imports(self) -> List[ModelImport]:
         return self._imports
 
-    def check(self, recheck: bool = False) -> ImportResults:
+    def check(self) -> ImportResults:
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)
 
             results: ImportResults = instance.api_imports_check_pool_id_post(model_import=self.imports,
                                                                              pool_id=self.pool_id)
 
-        if recheck and results['has_error_message']:
-            raise Exception('Unhandled import check errors')
         return results
 
     def create_metadata(self, metadata: ParsedMetadata) -> Generator[Tuple[str, int, int], None, None]:
@@ -235,8 +233,14 @@ class SplashbackImporter:
                 yield 'quality lookups', lookup_idx + 1, len(quality_lookups)
             # endregion
 
-    def run(self) -> ImportRunResult:
-        self.check(True)
+    def run(self, dry_run: bool = False) -> ImportRunResult:
+        results = self.check()
+
+        if results['has_error_message']:
+            raise Exception(f'Unhandled import check errors: {results["messages"]}')
+
+        if dry_run:
+            return ImportRunResult(imported_sample_count=0, imported_variant_count=0, imported_value_count=0)
 
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)

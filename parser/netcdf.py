@@ -1,8 +1,8 @@
 import json
 import re
 from argparse import Namespace
+from pathlib import Path
 from typing import Generator, List, Type, Any
-from typing.io import IO
 
 import numpy
 from netCDF4 import Dataset, Variable
@@ -24,16 +24,22 @@ from parser import BaseParser, ParsedMetadata
 
 
 class NetcdfParser(BaseParser):
-    def __init__(self, file: IO):
-        super().__init__(file)
+    def __init__(self, path: Path):
+        super().__init__(path)
 
-        self._dataset = Dataset(self._file.name, 'r')
+        self._dataset = Dataset(path, 'r')
         self._mapping = {}
 
     def start_silent(self, args: Namespace) -> List[ModelImport]:
         # Read mapping file
         with open(args.netcdf_mapping, 'r') as m:
             self._mapping = json.load(m)
+
+        if args.verbose:
+            print('Dataset', self._dataset)
+            print('Mapping', repr(self._mapping))
+            for parameter_var in [self._dataset.variables[v] for v in self._mapping['parameters']]:
+                print('Variable', parameter_var)
 
         self._imports = [r for r in self._parse_imports()]
         return self._imports
@@ -48,7 +54,7 @@ class NetcdfParser(BaseParser):
 
             model_import = self._imports[message['index']]
 
-            if message['stage'] != ImportCheckStage(1):
+            if message['stage'] == ImportCheckStage(1):
                 if 'SiteName' in message['fields'] and 'SiteCode' in message['fields']:
                     site = self._get_metadata(SiteObject, 'site', model_import)
                     metadata.add_site(site, model_import['site_code'])
@@ -82,12 +88,20 @@ class NetcdfParser(BaseParser):
     def _parse_imports(self) -> Generator[ModelImport, None, None]:
         # Iterate each parameter
         for parameter_var in [self._dataset.variables[v] for v in self._mapping['parameters']]:
+            parameter_var: Variable = parameter_var
+            parameter_attrs = parameter_var.ncattrs()
 
             # Iterate every combination of indices
             for dim_idxs, val in ndenumerate(parameter_var[:]):
 
                 # Filter out-of-bounds values
-                if val < parameter_var.valid_min or val >= parameter_var.valid_max:
+                if 'valid_min' in parameter_attrs and val < parameter_var.valid_min:
+                    continue
+                if 'valid_max' in parameter_attrs and val > parameter_var.valid_max:
+                    continue
+
+                # Filter fill values
+                if '_FillValue' in parameter_attrs and val == parameter_var.getncattr('_FillValue'):
                     continue
 
                 yield self._get_import(parameter_var, dim_idxs, val)
@@ -103,6 +117,22 @@ class NetcdfParser(BaseParser):
     def _get_field(self, field: str,
                    parameter_var: Variable = None, dim_idxs: List[str] = None, val: float = None,
                    model_import: ModelImport = None) -> Any:
+        field_parts = field.split('|')
+
+        exception = None
+        for field_part in field_parts:
+            try:
+                return self._get_field_value(field_part,
+                                             parameter_var=parameter_var, dim_idxs=dim_idxs, val=val,
+                                             model_import=model_import)
+            except Exception as e:
+                exception = e
+
+        raise Exception(f'Failed to get field: {exception}')
+
+    def _get_field_value(self, field: str,
+                         parameter_var: Variable = None, dim_idxs: List[str] = None, val: float = None,
+                         model_import: ModelImport = None) -> Any:
         # Get kwargs as dict
         kwargs = dict(locals())
         del kwargs['self']
@@ -178,15 +208,24 @@ class NetcdfParser(BaseParser):
             raise Exception('Field value not set')
 
         # Convert to correct type and return
-        if field_type == 'str':
-            if isinstance(field_value, float) or isinstance(field_value, numpy.ndarray):
-                return f'{field_value:.8f}'
-            return str(field_value)
-        elif field_type == 'float':
+        field_type_parts = field_type.split(':')
+
+        if field_type_parts[0] == 'str':
+            if isinstance(field_value, float) or isinstance(field_value, numpy.float32) \
+                    or isinstance(field_value, numpy.ndarray):
+                field_str_value = f'{field_value:.30f}'
+            else:
+                field_str_value = str(field_value)
+
+            if len(field_type_parts) == 1:
+                return field_str_value
+            print(field_type_parts)
+            return field_str_value[0:int(field_type_parts[1])]
+
+        elif field_type_parts[0] == 'float':
             return float(field_value)
 
-        field_type_parts = field_type.split(':')
-        if field_type_parts[0] == 'datetime':
+        elif field_type_parts[0] == 'datetime':
             dt = None
             if field_type_parts[1] == 'days_since_1950':
                 dt = timeconverters.convert_days_since_1950_to_datetime(float(field_value))

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import re
 import sys
 from argparse import Namespace
 from datetime import datetime
-from tempfile import NamedTemporaryFile
-from typing import Union
-from typing.io import IO
+from pathlib import Path
+from typing import Union, List
 from xml.etree import ElementTree
 
 import requests
@@ -19,22 +19,22 @@ server_host = 'http://thredds.aodn.org.au'
 
 
 class ThreddsFinder(BaseFinder):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, app_dir: Path):
+        super().__init__(app_dir)
 
-    def start_interactive(self) -> IO:
+    def start_interactive(self) -> List[Path]:
         print('Connecting to', server_host, '...')
         server = ThreddsServer(server_host)
         print('Found catalog', server.name, 'v' + server.version)
         print('Found services', ', '.join([s.name for s in server.services]))
 
         # Select dataset file
-        file = self._select_dataset(server.catalog)
-        if file is None:
+        path = self._select_dataset(server.catalog)
+        if path is None:
             raise Exception('No file selected')
-        return file
+        return [path]
 
-    def _select_dataset(self, catalog: ThreddsCatalog) -> Union[IO, None]:
+    def _select_dataset(self, catalog: ThreddsCatalog) -> Union[Path, None]:
         catalog.load()
 
         index = 0
@@ -105,11 +105,11 @@ class ThreddsFinder(BaseFinder):
 
         # Download dataset
         print('Downloading dataset', cmd_dataset.id, '...')
-        file = cmd_dataset.download(service)
+        path = cmd_dataset.download(service, self._app_dir)
         print('Dataset downloaded')
-        return file
+        return path
 
-    def start_silent(self, args: Namespace) -> IO:
+    def start_silent(self, args: Namespace) -> List[Path]:
         # Load THREDDS server
         thredds_server = ThreddsServer(server_host)
 
@@ -118,9 +118,31 @@ class ThreddsFinder(BaseFinder):
         if thredds_service is None:
             raise Exception('Service', args.thredds_service, 'not found')
 
-        # Open THREDDS dataset
+        if args.thredds_dataset_pattern:
+            # Find THREDDS datasets
+            thredds_datasets: List[ThreddsDataset] = self._find_datasets(thredds_server.catalog, args.thredds_dataset)
+
+            # Open THREDDS datasets and return paths
+            return [thredds_dataset.download(thredds_service, self._app_dir) for thredds_dataset in thredds_datasets]
+
+        # Open THREDDS dataset and return path
         thredds_dataset = ThreddsDataset(thredds_server, args.thredds_dataset)
-        return thredds_dataset.download(thredds_service)
+        return [thredds_dataset.download(thredds_service, self._app_dir)]
+
+    def _find_datasets(self, thredds_catalog: ThreddsCatalog, pattern: str, depth: int = 0) -> List[ThreddsDataset]:
+        thredds_datasets: List[ThreddsDataset] = []
+        thredds_catalog.load()
+
+        re_pattern = re.compile('/'.join(pattern.split('/')[0:depth + 1]))
+
+        matching_catalogs = [c for c in thredds_catalog.children if re_pattern.fullmatch(c.id) is not None]
+        for matching_catalog in matching_catalogs:
+            thredds_datasets += self._find_datasets(matching_catalog, pattern, depth + 1)
+
+        matching_datasets = [d for d in thredds_catalog.datasets if re_pattern.fullmatch(d.id) is not None]
+        thredds_datasets += matching_datasets
+
+        return thredds_datasets
 
 
 class ThreddsServer:
@@ -206,19 +228,19 @@ class ThreddsCatalog(ThreddsServerAccessor):
         super().__init__(server)
         self._id = catalog_id
         self._parent = parent
-        self._children = []
-        self._datasets = []
+        self._children: List[ThreddsCatalog] = []
+        self._datasets: List[ThreddsDataset] = []
 
     @property
     def parent(self) -> ThreddsCatalog:
         return self._parent
 
     @property
-    def children(self) -> [ThreddsCatalog]:
+    def children(self) -> List[ThreddsCatalog]:
         return self._children
 
     @property
-    def datasets(self) -> [ThreddsDataset]:
+    def datasets(self) -> List[ThreddsDataset]:
         return self._datasets
 
     @property
@@ -269,10 +291,19 @@ class ThreddsDataset(ThreddsServerAccessor):
     def date(self) -> datetime:
         return self._date
 
-    def download(self, service: ThreddsService) -> IO:
-        file = NamedTemporaryFile()
-        with requests.get(self.server.host + service.base + self.id, stream=True) as r:
-            r.raise_for_status()
-            for chunk in r.iter_content(chunk_size=8192):
-                file.write(chunk)
-        return file
+    def download(self, service: ThreddsService, dest_dir: Path) -> Path:
+        path = dest_dir.joinpath(self.id)
+
+        if path.exists():
+            # TODO: handle last modified date to update old datasets.
+            #  we will also need to delete data from Splashback in the old dataset...
+            return path
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with path.open('wb') as file:
+            with requests.get(self.server.host + service.base + self.id, stream=True) as r:
+                r.raise_for_status()
+                for chunk in r.iter_content(chunk_size=8192):
+                    file.write(chunk)
+        return path
