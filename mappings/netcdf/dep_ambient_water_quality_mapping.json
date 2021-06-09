@@ -1,0 +1,55 @@
+{
+  "@@dataset_id": "Derwent_Estuary_Program/Ambient_Water_Quality/DEP-AWQ_TS_19901022T000000Z_GB_FV01_END-20120515T112000Z.nc",
+  "templates": {
+    "import": {
+      "site_name": "",
+      "site_code": "ATTR site_code",
+      "date": "VAR TIME !datetime:days_since_1950:json",
+      "time": "",
+      "taken_by": "ATTR author",
+      "comment": "",
+      "program": "CONST AODN Ambient Water Quality",
+      "variant_type": "CONST depth",
+      "variant_date_time": "",
+      "variant_value": "VAR DEPTH",
+      "variant_comment": "",
+      "parameter": "PARAM name",
+      "qualifier": "",
+      "value": "PARAM value",
+      "quality": "CONST nr",
+      "laboratory": "CONST field",
+      "sampling_method": "ATTR instrument"
+    },
+    "site": {
+      "name": "FIELD site_code",
+      "location": "FIELD site_code",
+      "latitude": "ATTR geospatial_lat_min !float",
+      "longitude": "ATTR geospatial_lon_min !float"
+    },
+    "program": {
+      "name": "FIELD program"
+    },
+    "variant_type": {
+      "name": "FIELD variant_type",
+      "unit": "VARATTR DEPTH units"
+    },
+    "parameter": {
+      "name": "VARATTR (FIELD parameter) standard_name",
+      "short_name": "FIELD parameter",
+      "unit": "VARATTR (FIELD parameter) units"
+    },
+    "laboratory": {
+      "name": "FIELD laboratory"
+    },
+    "sampling_method": {
+      "name": "FIELD sampling_method"
+    },
+    "quality": {
+      "name": "FIELD quality"
+    }
+  },
+  "parameters": [
+    "TEMP",
+    "PSAL"
+  ]
+}

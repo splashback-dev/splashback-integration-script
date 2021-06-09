@@ -1,74 +1,244 @@
-from typing import List
-from typing.io import IO
+from typing import Generator, List, Tuple
 
 import splashback_data
-from netCDF4 import Dataset, Variable, Dimension
-from numpy import ndenumerate
-from splashback_data.api import imports_api
-from splashback_data.models import ModelImport
+from splashback_data.api import imports_api, sites_api, site_lookups_api, programs_api, program_lookups_api, \
+    sample_variant_types_api, parameters_api, parameter_lookups_api, laboratories_api, laboratory_lookups_api, \
+    sampling_methods_api, sampling_method_lookups_api, qualities_api, quality_lookups_api
+from splashback_data.model.import_results import ImportResults
+from splashback_data.model.import_run_result import ImportRunResult
+from splashback_data.model.lookup_object import LookupObject
+from splashback_data.model.model_import import ModelImport
 
-import timeconverters
+import listutils
+from parser import ParsedMetadata
+
+# Setup Splashback API configuration
+splashback_host = 'https://api.splashback.io'
 
 
 class SplashbackImporter:
-    def __init__(self, host: str, api_key: str, pool_id: str, file: IO):
+    def __init__(self, api_key: str, pool_id: str, imports: List[ModelImport],
+                 ignore_zero_dups: bool = False, ignore_dups: bool = False):
         self._configuration = splashback_data.Configuration(
-            host=host + '/data'
+            host=splashback_host + '/data'
         )
         self._configuration.api_key['api-key'] = api_key
         self._configuration.api_key_prefix['api-key'] = 'API-Key'
 
         self._pool_id = pool_id
 
-        self._dataset = Dataset(file.name, 'r')
-        print(self._dataset)
+        self._imports = imports
+        if ignore_zero_dups:
+            self._ignore_zero_dups()
+        if ignore_dups:
+            self._ignore_dups()
 
-    def parse_rows(self, mapping: dict) -> List[ModelImport]:
-        # Iterate each parameter
-        for parameter_var in [self._dataset.variables[v] for v in mapping['parameters']]:
+    @staticmethod
+    def _compare_models(a: ModelImport, b: ModelImport):
+        return a['site_code'] == b['site_code'] \
+               and a['date'] == b['date'] \
+               and a['program'] == b['program'] \
+               and a['variant_type'] == b['variant_type'] \
+               and a['variant_date_time'] == b['variant_date_time'] \
+               and a['variant_value'] == b['variant_value'] \
+               and a['variant_comment'] == b['variant_comment'] \
+               and a['parameter'] == b['parameter']
 
-            # Iterate every combination of indices
-            for dim_idxs, val in ndenumerate(parameter_var[:]):
+    def _ignore_zero_dups(self) -> None:
+        def is_zero_model(mdl: ModelImport):
+            return float(mdl['value']) == 0. and float(mdl['variant_value']) == 0.
 
-                # Filter out-of-bounds values
-                if val < parameter_var.valid_min or val >= parameter_var.valid_max:
-                    continue
+        zero_dup_idxs = set()
+        for idx_a, mdl_a in enumerate(self.imports):
+            for idx_b, mdl_b in enumerate(self.imports):
+                # Only check previous entries
+                if idx_b >= idx_a:
+                    break
 
-                yield self._get_import(mapping, parameter_var, dim_idxs, val)
+                # Compare
+                if self._compare_models(mdl_a, mdl_b):
+                    if is_zero_model(mdl_a):
+                        zero_dup_idxs.add(idx_a)
+                    if is_zero_model(mdl_b):
+                        zero_dup_idxs.add(idx_b)
 
-    def _get_import(self, mapping: dict, parameter_var: Variable, dim_idxs: List[str], val: float) -> ModelImport:
-        return ModelImport(
-            **{k: self._get_import_field(v, parameter_var, dim_idxs, val) for k, v in mapping['template'].items()})
+        self._imports = [mdl for idx, mdl in enumerate(self.imports) if idx not in zero_dup_idxs]
 
-    def _get_import_field(self, field: str, parameter_var: Variable, dim_idxs: List[str], val: float) -> str:
-        field = field.strip()
-        if field == '':
-            return ''
+    def _ignore_dups(self) -> None:
+        dup_idxs = set()
+        for idx_a, mdl_a in enumerate(self.imports):
+            for idx_b, mdl_b in enumerate(self.imports):
+                # Only check previous entries
+                if idx_b >= idx_a:
+                    break
 
-        accessor, *args_list = field.split(' ')
-        args = ' '.join(args_list)
-        if accessor == 'ATTR':
-            return str(self._dataset.getncattr(args))
-        if accessor == 'CONST':
-            return args
-        if accessor == 'PARAM':
-            if args == 'name':
-                return parameter_var.name
-            if args == 'value':
-                return str(val)
-        if accessor == 'VAR':
-            var: Variable = self._dataset.variables[args_list[0]]
-            var_idxs = [dim_idxs[i] for i, d in enumerate(parameter_var.dimensions) if d in var.dimensions]
-            return str(var[tuple(var_idxs)])
-        else:
-            return ''
+                # Compare
+                if self._compare_models(mdl_a, mdl_b):
+                    dup_idxs.add(idx_b)
 
-    def check(self, rows: List[ModelImport]) -> None:
+        self._imports = [mdl for idx, mdl in enumerate(self.imports) if idx not in dup_idxs]
+
+    @property
+    def pool_id(self) -> int:
+        return int(self._pool_id)
+
+    @property
+    def imports(self) -> List[ModelImport]:
+        return self._imports
+
+    def check(self, recheck: bool = False) -> ImportResults:
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)
 
-            try:
-                response = instance.api_imports_check_pool_id_post(model_import=rows, pool_id=int(self._pool_id))
-                print(response)
-            except splashback_data.ApiException as e:
-                print('Exception when calling: %s\n' % e)
+            results: ImportResults = instance.api_imports_check_pool_id_post(model_import=self.imports,
+                                                                             pool_id=self.pool_id)
+
+        if recheck and results['has_error_message']:
+            raise Exception('Unhandled import check errors')
+        return results
+
+    def create_metadata(self, metadata: ParsedMetadata) -> Generator[Tuple[str, int, int], None, None]:
+        with splashback_data.ApiClient(self._configuration) as client:
+            # region Sites
+            site_instance = sites_api.SitesApi(client)
+            remote_sites = site_instance.api_sites_pool_id_get(pool_id=self.pool_id)
+            for site_idx, site in enumerate(metadata.sites):
+                remote_site = listutils.get_unique_value(remote_sites, ['name', 'location'], site)
+                if remote_site is None:
+                    remote_site = site_instance.api_sites_pool_id_post(site_object=site, pool_id=self.pool_id)
+
+                site['id'] = remote_site['id']
+                yield 'sites', site_idx + 1, len(metadata.sites)
+
+            site_lookup_instance = site_lookups_api.SiteLookupsApi(client)
+            site_lookups = metadata.get_lookups('sites')
+            for lookup_idx, (key, idx) in enumerate(site_lookups):
+                lookup = LookupObject(id=metadata.sites[idx]['id'], key=key, pool_id=self.pool_id)
+
+                site_lookup_instance.api_site_lookups_pool_id_post(lookup_object=lookup, pool_id=self.pool_id)
+                yield 'site lookups', lookup_idx + 1, len(site_lookups)
+            # endregion
+
+            # region Programs
+            program_instance = programs_api.ProgramsApi(client)
+            remote_programs = program_instance.api_programs_pool_id_get(pool_id=self.pool_id)
+            for program_idx, program in enumerate(metadata.programs):
+                remote_program = listutils.get_unique_value(remote_programs, ['name'], program)
+                if remote_program is None:
+                    remote_program = program_instance.api_programs_pool_id_post(program_object=program,
+                                                                                pool_id=self.pool_id)
+
+                program['id'] = remote_program['id']
+                yield 'program', program_idx + 1, len(metadata.programs)
+
+            program_lookup_instance = program_lookups_api.ProgramLookupsApi(client)
+            program_lookups = metadata.get_lookups('programs')
+            for lookup_idx, (key, idx) in enumerate(program_lookups):
+                lookup = LookupObject(id=metadata.programs[idx]['id'], key=key, pool_id=self.pool_id)
+
+                program_lookup_instance.api_program_lookups_pool_id_post(lookup_object=lookup, pool_id=self.pool_id)
+                yield 'program lookups', lookup_idx + 1, len(program_lookups)
+            # endregion
+
+            # region Variant Types
+            variant_type_instance = sample_variant_types_api.SampleVariantTypesApi(client)
+            for variant_type_idx, variant_type in enumerate(metadata.variant_types):
+                variant_type_instance.api_sample_variant_types_pool_id_post(sample_variant_type_object=variant_type,
+                                                                            pool_id=self.pool_id)
+                yield 'variant type', variant_type_idx + 1, len(metadata.variant_types)
+            # endregion
+
+            # region Parameters
+            parameter_instance = parameters_api.ParametersApi(client)
+            remote_parameters = parameter_instance.api_parameters_pool_id_get(pool_id=self.pool_id)
+            for parameter_idx, parameter in enumerate(metadata.parameters):
+                remote_parameter = listutils.get_unique_value(remote_parameters, ['name', 'unit'], parameter)
+                if remote_parameter is None:
+                    remote_parameter = parameter_instance.api_parameters_pool_id_post(parameter_object=parameter,
+                                                                                      pool_id=self.pool_id)
+
+                parameter['id'] = remote_parameter['id']
+                yield 'parameter', parameter_idx + 1, len(metadata.parameters)
+
+            parameter_lookup_instance = parameter_lookups_api.ParameterLookupsApi(client)
+            parameter_lookups = metadata.get_lookups('parameters')
+            for lookup_idx, (key, idx) in enumerate(parameter_lookups):
+                lookup = LookupObject(id=metadata.parameters[idx]['id'], key=key, pool_id=self.pool_id)
+
+                parameter_lookup_instance.api_parameter_lookups_pool_id_post(lookup_object=lookup, pool_id=self.pool_id)
+                yield 'parameter lookups', lookup_idx + 1, len(parameter_lookups)
+            # endregion
+
+            # region Laboratories
+            laboratory_instance = laboratories_api.LaboratoriesApi(client)
+            remote_laboratories = laboratory_instance.api_laboratories_pool_id_get(pool_id=self.pool_id)
+            for laboratory_idx, laboratory in enumerate(metadata.laboratories):
+                remote_laboratory = listutils.get_unique_value(remote_laboratories, ['name'], laboratory)
+                if remote_laboratory is None:
+                    remote_laboratory = laboratory_instance.api_laboratories_pool_id_post(laboratory_object=laboratory,
+                                                                                          pool_id=self.pool_id)
+
+                laboratory['id'] = remote_laboratory['id']
+                yield 'laboratory', laboratory_idx + 1, len(metadata.laboratories)
+
+            laboratory_lookup_instance = laboratory_lookups_api.LaboratoryLookupsApi(client)
+            laboratory_lookups = metadata.get_lookups('laboratories')
+            for lookup_idx, (key, idx) in enumerate(laboratory_lookups):
+                lookup = LookupObject(id=metadata.laboratories[idx]['id'], key=key, pool_id=self.pool_id)
+
+                laboratory_lookup_instance.api_laboratory_lookups_pool_id_post(lookup_object=lookup,
+                                                                               pool_id=self.pool_id)
+                yield 'laboratory lookups', lookup_idx + 1, len(laboratory_lookups)
+            # endregion
+
+            # region Sampling Methods
+            sampling_method_instance = sampling_methods_api.SamplingMethodsApi(client)
+            remote_sampling_methods = sampling_method_instance.api_sampling_methods_pool_id_get(pool_id=self.pool_id)
+            for sampling_method_idx, sampling_method in enumerate(metadata.sampling_methods):
+                remote_sampling_method = listutils.get_unique_value(remote_sampling_methods, ['name'], sampling_method)
+                if remote_sampling_method is None:
+                    remote_sampling_method = sampling_method_instance.api_sampling_methods_pool_id_post(
+                        sampling_method_object=sampling_method,
+                        pool_id=self.pool_id)
+
+                sampling_method['id'] = remote_sampling_method['id']
+                yield 'sampling method', sampling_method_idx + 1, len(metadata.sampling_methods)
+
+            sampling_method_lookup_instance = sampling_method_lookups_api.SamplingMethodLookupsApi(client)
+            sampling_method_lookups = metadata.get_lookups('sampling_methods')
+            for lookup_idx, (key, idx) in enumerate(sampling_method_lookups):
+                lookup = LookupObject(id=metadata.sampling_methods[idx]['id'], key=key, pool_id=self.pool_id)
+
+                sampling_method_lookup_instance.api_sampling_method_lookups_pool_id_post(lookup_object=lookup,
+                                                                                         pool_id=self.pool_id)
+                yield 'sampling method lookups', lookup_idx + 1, len(sampling_method_lookups)
+            # endregion
+
+            # region Qualities
+            quality_instance = qualities_api.QualitiesApi(client)
+            remote_qualities = quality_instance.api_qualities_pool_id_get(pool_id=self.pool_id)
+            for quality_idx, quality in enumerate(metadata.qualities):
+                remote_quality = listutils.get_unique_value(remote_qualities, ['name'], quality)
+                if remote_quality is None:
+                    remote_quality = quality_instance.api_qualities_pool_id_post(quality_object=quality,
+                                                                                 pool_id=self.pool_id)
+
+                quality['id'] = remote_quality['id']
+                yield 'quality', quality_idx + 1, len(metadata.qualities)
+
+            quality_lookup_instance = quality_lookups_api.QualityLookupsApi(client)
+            quality_lookups = metadata.get_lookups('qualities')
+            for lookup_idx, (key, idx) in enumerate(quality_lookups):
+                lookup = LookupObject(id=metadata.qualities[idx]['id'], key=key, pool_id=self.pool_id)
+
+                quality_lookup_instance.api_quality_lookups_pool_id_post(lookup_object=lookup, pool_id=self.pool_id)
+                yield 'quality lookups', lookup_idx + 1, len(quality_lookups)
+            # endregion
+
+    def run(self) -> ImportRunResult:
+        self.check(True)
+
+        with splashback_data.ApiClient(self._configuration) as client:
+            instance = imports_api.ImportsApi(client)
+
+            return instance.api_imports_run_pool_id_post(model_import=self.imports, pool_id=self.pool_id)

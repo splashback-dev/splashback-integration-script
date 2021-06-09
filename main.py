@@ -1,172 +1,145 @@
-import json
 import os
+import shutil
 import sys
-from typing import Union
+from argparse import ArgumentParser
+from typing import List, Type
 from typing.io import IO
 
-from argparse import ArgumentParser
+from finder import BaseFinder
+from finder.thredds import ThreddsFinder
+from parser import BaseParser
+from parser.netcdf import NetcdfParser
 from splashback import SplashbackImporter
-from thredds import ThreddsServer, ThreddsCatalog, ThreddsDataset
-
-# Setup THREDDS server
-server_host = 'http://thredds.aodn.org.au'
-
-# Setup Splashback API configuration
-splashback_host = 'https://api.splashback.io'
 
 
-def select_dataset(catalog: ThreddsCatalog) -> Union[IO, None]:
-    catalog.load()
-
-    index = 0
-    for c in catalog.children:
-        index += 1
-        print('[' + str(index) + ']', c.id)
-    for d in catalog.datasets:
-        index += 1
-        print('[' + str(index) + ']', d.id,
-              '(Size: ' + str(d.size) + d.size_units + ', Date: ' + d.date.isoformat() + ')')
-
-    cmd = input('>> ').strip().lower()
-    if cmd == 'q':
-        # Quit
-        print('Quiting ...')
-        return
-    if cmd == 'b':
-        # Back
-        if catalog.parent is None:
-            print('No parent catalog. Quiting ...')
-            return
-        return select_dataset(catalog.parent)
-    if cmd == 'r':
-        # Refresh
-        return select_dataset(catalog)
+def select_finder() -> BaseFinder:
+    print('Select a finder')
+    finders: List[Type[BaseFinder]] = [ThreddsFinder]
+    for idx, finder_type in enumerate(finders):
+        print(f'[{idx}] {finder_type.__name__}')
+    selected_str = input('>> ').strip()
 
     try:
-        cmd_index = int(cmd)
+        selected_idx = int(selected_str)
     except ValueError:
-        print('Invalid command', file=sys.stderr)
-        return
+        return select_finder()
 
-    if cmd_index < 1 or cmd_index > index:
-        print('Invalid index', file=sys.stderr)
-        return
-
-    if cmd_index <= len(catalog.children):
-        # Catalog selected
-        cmd_catalog = catalog.children[cmd_index - 1]
-        print('Loading catalog', cmd_catalog.id, '...')
-        return select_dataset(cmd_catalog)
-
-    # Dataset selected
-    cmd_index -= len(catalog.children)
-    cmd_dataset = catalog.datasets[cmd_index - 1]
-
-    # Select service
-    service = None
-    while service is None:
-        print('Select a service ...')
-        service_index = 0
-        for s in catalog.server.services:
-            service_index += 1
-            print('[' + str(service_index) + ']', s.name)
-
-        service_cmd = input('>> ').strip().lower()
-        if service_cmd == 'b':
-            return select_dataset(catalog)
-
-        try:
-            service_cmd_index = int(service_cmd)
-        except ValueError:
-            print('Invalid command', file=sys.stderr)
-            return
-
-        if 0 < service_cmd_index <= service_index:
-            service = catalog.server.services[service_cmd_index - 1]
-
-    # Download dataset
-    print('Downloading dataset', cmd_dataset.id, '...')
-    file = cmd_dataset.download(service)
-    print('Dataset downloaded')
-    return file
+    if 0 <= selected_idx < len(finders):
+        return finders[selected_idx]()
+    return select_finder()
 
 
-def import_dataset(file: IO) -> None:
-    # Read Splashback API key
-    print('Enter your Splashback API key ...')
-    api_key = input('>> ').strip()
+def select_parser(file: IO) -> BaseParser:
+    print('Select a parser')
+    parsers: List[Type[BaseParser]] = [NetcdfParser]
+    for idx, parser_type in enumerate(parsers):
+        print(f'[{idx}] {parser_type.__name__}')
+    selected_str = input('>> ').strip()
 
-    # Enter Splashback Pool ID
-    print('Enter your Splashback Pool ID ...')
-    pool_id = input('>> ').strip()
+    try:
+        selected_idx = int(selected_str)
+    except ValueError:
+        return select_parser(file)
 
-    # Load dataset
-    importer = SplashbackImporter(splashback_host, api_key, pool_id, file)
+    if 0 <= selected_idx < len(parsers):
+        return parsers[selected_idx](file)
+    return select_parser(file)
 
 
 def main_interactive() -> None:
-    print('Connecting to', server_host, '...')
-    server = ThreddsServer(server_host)
-    print('Found catalog', server.name, 'v' + server.version)
-    print('Found services', ', '.join([s.name for s in server.services]))
+    m_finder = select_finder()
+    file = m_finder.start_interactive()
 
-    # Select dataset file
-    file = select_dataset(server.catalog)
-    if file is None:
-        return
-
-    # Load dataset file
     try:
-        import_dataset(file)
+        m_parser = select_parser(file)
+        imports = m_parser.start_interactive()
+
+        m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id, imports)
+        check_results = m_importer.check()
+        metadata = m_parser.start_metadata_interactive(check_results)
+
+    finally:
+        file.close()
+
+    m_importer.create_metadata(metadata)
+    m_importer.run()
+
+
+def main_silent() -> None:
+    if args.finder == 'thredds':
+        m_finder = ThreddsFinder()
+    else:
+        raise Exception(f'Unknown finder: {args.finder}')
+
+    file = m_finder.start_silent(args)
+
+    try:
+        if args.parser == 'netcdf':
+            m_parser = NetcdfParser(file)
+        else:
+            raise Exception(f'Unknown parser: {args.parser}')
+
+        imports = m_parser.start_silent(args)
+
+        option_ignore_zero_dups = 'ignore_zero_dups' in args.option if type(args.option) is list else False
+        option_ignore_dups = 'ignore_dups' in args.option if type(args.option) is list else False
+        m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id, imports,
+                                        ignore_zero_dups=option_ignore_zero_dups, ignore_dups=option_ignore_dups)
+        check_results = m_importer.check()
+        metadata = m_parser.start_metadata_silent(check_results, args)
+
     finally:
         # Cleanup
         file.close()
 
+    line_len = shutil.get_terminal_size()[0]
+    for name, current, count in m_importer.create_metadata(metadata):
+        end = '\n' if current == count else '\r'
+        print(f'{name} ({current}/{count})'.ljust(line_len), end=end)
 
-def main() -> None:
-    # Load THREDDS server
-    thredds_server = ThreddsServer(server_host)
-
-    # Get THREDDS service
-    thredds_service = thredds_server.find_service(args.service)
-    if thredds_service is None:
-        print('Service', args.service, 'not found', file=sys.stderr)
-        return
-
-    # Open THREDDS dataset
-    thredds_dataset = ThreddsDataset(thredds_server, args.dataset)
-    file = thredds_dataset.download(thredds_service)
-
-    # Read mapping file
-    with open(args.mapping, 'r') as m:
-        mapping = json.load(m)
-
-    # Import to Splashback
-    try:
-        importer = SplashbackImporter(splashback_host, os.environ['SPLASHBACK_API_KEY'], args.pool_id, file)
-        imports = [r for r in importer.parse_rows(mapping)]
-        importer.check(imports)
-    finally:
-        # Cleanup
-        file.close()
+    result = m_importer.run()
+    print(f'Imported {result["imported_sample_count"]} samples,'
+          f' {result["imported_variant_count"]} variants and'
+          f' {result["imported_value_count"]} values')
 
 
 if __name__ == '__main__':
     # Setup argument parser
     parser = ArgumentParser()
-    parser.add_argument('-i', '--interactive',
-                        help='Enable interactive mode. All other options will be ignored.', action='store_true')
-    parser.add_argument('-d', '--dataset', type=str,
-                        help='THREDDS Dataset ID to download.')
-    parser.add_argument('-s', '--service', type=str,
-                        help='THREDDS Service name to use for dataset download.')
-    parser.add_argument('-p', '--pool-id', type=str,
+    parser.add_argument('-i', '--interactive', action='store_true',
+                        help='Enable interactive mode, ignoring other CLI arguments.')
+
+    parser.add_argument('--pool-id', type=str,
                         help='Splashback Pool ID to integrate.')
-    parser.add_argument('-m', '--mapping', type=str,
-                        help='Splashback importer field mapping file.')
+    parser.add_argument('-f', '--finder', type=str, choices=['thredds'],
+                        help='Finder to locate and fetch data.')
+    parser.add_argument('-p', '--parser', type=str, choices=['netcdf'],
+                        help='Parser to read fetched data.')
+    parser.add_argument('-o', '--option', type=str, action='append',
+                        help='Additional options.')
+
+    args_no_help = [a for a in sys.argv if a != '-h' and a != '--help']
+    current_args = parser.parse_known_args(args_no_help)[0]
+
+    # Add finders
+    is_finder_thredds = not current_args.interactive and current_args.finder == 'thredds'
+    parser_group = parser.add_argument_group(title='Finder: thredds',
+                                             description='Work with a THREDDS data source.')
+    parser_group.add_argument('--thredds-dataset', type=str, required=is_finder_thredds,
+                              help='THREDDS Dataset ID to download.')
+    parser_group.add_argument('--thredds-service', type=str, required=is_finder_thredds,
+                              help='THREDDS Service name to use for dataset download.')
+
+    # Add parsers
+    is_parser_netcdf = not current_args.interactive and current_args.parser == 'netcdf'
+    parser_group = parser.add_argument_group(title='Parser: netcdf',
+                                             description='Read NetCDF files.')
+    parser_group.add_argument('--netcdf-mapping', type=str, required=is_parser_netcdf,
+                              help='Field mapping file for the NetCDF parser.')
+
     args = parser.parse_args()
 
     if args.interactive:
         main_interactive()
     else:
-        main()
+        main_silent()
