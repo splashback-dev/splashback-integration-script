@@ -238,10 +238,6 @@ class SplashbackImporter:
     def run(self, dry_run: bool = False, skip_exist_sample: bool = False) -> ImportRunResult:
         results = self.check()
 
-        # Unhandled error messages
-        if results['has_error_message']:
-            raise Exception(f'Unhandled import check errors: {results["messages"]}')
-
         # Skip existing samples
         if skip_exist_sample:
             skip_idxs = set()
@@ -253,6 +249,11 @@ class SplashbackImporter:
                 skip_idxs.add(message['index'])
 
             self._imports = [r for idx, r in enumerate(self.imports) if idx not in skip_idxs]
+            results = self.check()
+
+        # Unhandled error messages
+        if results['has_error_message']:
+            raise Exception(f'Unhandled import check errors: {results["messages"]}')
 
         # Return nothing for dry run
         if dry_run:
