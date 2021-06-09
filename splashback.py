@@ -4,6 +4,8 @@ import splashback_data
 from splashback_data.api import imports_api, sites_api, site_lookups_api, programs_api, program_lookups_api, \
     sample_variant_types_api, parameters_api, parameter_lookups_api, laboratories_api, laboratory_lookups_api, \
     sampling_methods_api, sampling_method_lookups_api, qualities_api, quality_lookups_api
+from splashback_data.model.import_check_stage import ImportCheckStage
+from splashback_data.model.import_check_status import ImportCheckStatus
 from splashback_data.model.import_results import ImportResults
 from splashback_data.model.import_run_result import ImportRunResult
 from splashback_data.model.lookup_object import LookupObject
@@ -233,15 +235,30 @@ class SplashbackImporter:
                 yield 'quality lookups', lookup_idx + 1, len(quality_lookups)
             # endregion
 
-    def run(self, dry_run: bool = False) -> ImportRunResult:
+    def run(self, dry_run: bool = False, skip_exist_sample: bool = False) -> ImportRunResult:
         results = self.check()
 
+        # Unhandled error messages
         if results['has_error_message']:
             raise Exception(f'Unhandled import check errors: {results["messages"]}')
 
+        # Skip existing samples
+        if skip_exist_sample:
+            skip_idxs = set()
+            for message in results['messages']:
+                # Only process sample remote duplicate messages
+                if 'SiteCode' not in message['fields'] \
+                        or message['stage'] != ImportCheckStage(3) or message['status'] != ImportCheckStatus(0):
+                    continue
+                skip_idxs.add(message['index'])
+
+            self._imports = [r for idx, r in enumerate(self.imports) if idx not in skip_idxs]
+
+        # Return nothing for dry run
         if dry_run:
             return ImportRunResult(imported_sample_count=0, imported_variant_count=0, imported_value_count=0)
 
+        # Perform import
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)
 

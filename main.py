@@ -85,6 +85,8 @@ def main_silent(app_dir: Path) -> None:
 
         option_ignore_zero_dups = 'ignore_zero_dups' in args.option if type(args.option) is list else False
         option_ignore_dups = 'ignore_dups' in args.option if type(args.option) is list else False
+        option_skip_exist_sample = 'skip_exist_sample' in args.option if type(args.option) is list else False
+
         m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id, imports,
                                         ignore_zero_dups=option_ignore_zero_dups,
                                         ignore_dups=option_ignore_dups)
@@ -96,7 +98,7 @@ def main_silent(app_dir: Path) -> None:
             if args.verbose:
                 end = '\n' if current == count else '\r'
                 print(f'{name} ({current}/{count})'.ljust(line_len), end=end)
-        result = m_importer.run(args.dry_run)
+        result = m_importer.run(args.dry_run, option_skip_exist_sample)
 
         print(f'Imported {result["imported_sample_count"]} samples,'
               f' {result["imported_variant_count"]} variants and'
@@ -113,6 +115,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--pool-id', type=str,
                         help='Splashback Pool ID to integrate.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Do not publish the data to Splashback.')
     parser.add_argument('-d', '--dir', type=str,
                         help='Directory to store data. If unspecified a temporary directory will be used.')
     parser.add_argument('-f', '--finder', type=str, choices=['thredds'],
@@ -120,9 +124,8 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--parser', type=str, choices=['netcdf'],
                         help='Parser to read fetched data.')
     parser.add_argument('-o', '--option', type=str, action='append',
+                        choices=['ignore_zero_dups', 'ignore_dups', 'skip_exist_sample'],
                         help='Additional options.')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Do not publish the data to Splashback.')
 
     args_no_help = [a for a in sys.argv if a != '-h' and a != '--help']
     current_args = parser.parse_known_args(args_no_help)[0]
