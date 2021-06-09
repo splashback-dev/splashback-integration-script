@@ -1,5 +1,5 @@
 {
-  "@@dataset_id": "IMOS/ANMN/NRS/NRSYON/Biogeochem_profiles/IMOS_ANMN-NRS_CDEST_20120615T005204Z_NRSYON_FV01_Profile-SBE19_C-20150415T003155Z.nc",
+  "@@dataset_id": "IMOS/ANMN/NRS/NRSDAR/Biogeochem_profiles/IMOS_ANMN-NRS_CDEFKST_20190214T092954Z_NRSDAR_FV01_Profile-SBE9_C-20190317T225702Z.nc",
   "templates": {
     "import": {
       "site_name": "",
@@ -18,7 +18,7 @@
       "value": "PARAM value",
       "quality": "CONST nr",
       "laboratory": "CONST field",
-      "sampling_method": "ATTR instrument"
+      "sampling_method": "ATTR instrument !str:30"
     },
     "site": {
       "name": "FIELD site_code",

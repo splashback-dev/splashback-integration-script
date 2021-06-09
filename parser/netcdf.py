@@ -87,7 +87,8 @@ class NetcdfParser(BaseParser):
 
     def _parse_imports(self) -> Generator[ModelImport, None, None]:
         # Iterate each parameter
-        for parameter_var in [self._dataset.variables[v] for v in self._mapping['parameters']]:
+        for parameter_var in [self._dataset.variables[v] for v in self._mapping['parameters']
+                              if v in self._dataset.variables]:
             parameter_var: Variable = parameter_var
             parameter_attrs = parameter_var.ncattrs()
 
