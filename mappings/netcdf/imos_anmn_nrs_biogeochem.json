@@ -6,7 +6,7 @@
       "site_code": "ATTR site_code",
       "date": "VAR TIME !datetime:days_since_1950:json",
       "time": "",
-      "taken_by": "ATTR author",
+      "taken_by": "ATTR author !str:30",
       "comment": "",
       "program": "ATTR station",
       "variant_type": "CONST depth",

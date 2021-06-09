@@ -75,6 +75,13 @@ def main_silent(app_dir: Path) -> None:
 
     paths = m_finder.start_silent(args)
 
+    if args.start_path is not None:
+        start_path = Path(args.start_path)
+        start_path_idxs = [idx for idx, path in enumerate(paths) if path.relative_to(app_dir) == start_path]
+        if len(start_path_idxs) != 1:
+            raise Exception(f'Failed to find first path: {start_path}')
+        paths = [path for idx, path in enumerate(paths) if idx >= start_path_idxs[0]]
+
     for path in paths:
         if args.parser == 'netcdf':
             m_parser = NetcdfParser(path)
@@ -119,6 +126,8 @@ if __name__ == '__main__':
                         help='Do not publish the data to Splashback.')
     parser.add_argument('-d', '--dir', type=str,
                         help='Directory to store data. If unspecified a temporary directory will be used.')
+    parser.add_argument('--start-path', type=str,
+                        help='Path to start importing from. Useful if an import was interrupted and should be resumed.')
     parser.add_argument('-f', '--finder', type=str, choices=['thredds'],
                         help='Finder to locate and fetch data.')
     parser.add_argument('-p', '--parser', type=str, choices=['netcdf'],

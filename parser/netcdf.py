@@ -219,7 +219,6 @@ class NetcdfParser(BaseParser):
 
             if len(field_type_parts) == 1:
                 return field_str_value
-            print(field_type_parts)
             return field_str_value[0:int(field_type_parts[1])]
 
         elif field_type_parts[0] == 'float':
