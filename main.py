@@ -6,6 +6,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Type
 
+from splashback_data.model.import_results import ImportResults
+from splashback_data.model.model_import import ModelImport
+
 from finder import BaseFinder
 from finder.thredds import ThreddsFinder
 from parser import BaseParser
@@ -56,15 +59,15 @@ def main_interactive(app_dir: Path) -> None:
     m_parser = select_parser(path)
     imports = m_parser.start_interactive()
 
-    m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id, imports)
-    check_results = m_importer.check()
+    m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id)
+    check_results = m_importer.check(imports)
     metadata = m_parser.start_metadata_interactive(check_results)
 
     line_len = shutil.get_terminal_size()[0]
     for name, current, count in m_importer.create_metadata(metadata):
         end = '\n' if current == count else '\r'
         print(f'{name} ({current}/{count})'.ljust(line_len), end=end)
-    m_importer.run()
+    m_importer.run(imports)
 
 
 def main_silent(app_dir: Path) -> None:
@@ -75,6 +78,7 @@ def main_silent(app_dir: Path) -> None:
 
     paths = m_finder.start_silent(args)
 
+    # Start from start path if provided
     if args.start_path is not None:
         start_path = Path(args.start_path)
         start_path_idxs = [idx for idx, path in enumerate(paths) if path.relative_to(app_dir) == start_path]
@@ -82,34 +86,67 @@ def main_silent(app_dir: Path) -> None:
             raise Exception(f'Failed to find first path: {start_path}')
         paths = [path for idx, path in enumerate(paths) if idx >= start_path_idxs[0]]
 
-    for path in paths:
-        if args.parser == 'netcdf':
-            m_parser = NetcdfParser(path)
-        else:
-            raise Exception(f'Unknown parser: {args.parser}')
+    # Create importer
+    m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id)
 
-        imports = m_parser.start_silent(args)
+    # Process all paths
+    while len(paths) > 0:
+        # Generate batch
+        batch_imports: List[ModelImport] = []
+        batch_parsers: List[BaseParser] = []
+        batch_sizes: List[int] = []
+        batch_paths: List[Path] = []
+        for path in paths:
+            if args.parser == 'netcdf':
+                m_parser = NetcdfParser(path)
+            else:
+                raise Exception(f'Unknown parser: {args.parser}')
 
-        option_ignore_zero_dups = 'ignore_zero_dups' in args.option if type(args.option) is list else False
-        option_ignore_dups = 'ignore_dups' in args.option if type(args.option) is list else False
+            path_imports = m_parser.start_silent(args)
+
+            # If we have at least one import in the batch and have reached the batch size, break
+            if len(batch_imports) != 0 and len(batch_imports) + len(path_imports) > args.batch_size:
+                break
+
+            # Append path imports
+            batch_imports += path_imports
+            batch_parsers += [m_parser]
+            batch_sizes += [len(path_imports)]
+            batch_paths += [path]
+
+        # Remove batched paths
+        paths = paths[len(batch_paths):]
+
+        # Check batch
+        check_results = m_importer.check(batch_imports)
+
+        # Generate missing metadata
+        metadata = None
+        for idx, m_parser in enumerate(batch_parsers):
+            m_start_idx = sum(batch_sizes[0:idx])
+            m_end_idx = m_start_idx + batch_sizes[idx]
+            m_messages = [m for m in check_results['messages'] if m_start_idx <= m['index'] < m_end_idx]
+            for m in m_messages:
+                m['index'] -= m_start_idx
+            m_check_results = ImportResults(messages=m_messages)
+            metadata = m_parser.start_metadata_silent(m_check_results, args, metadata=metadata)
+
+        if metadata is not None:
+            # Create metadata
+            line_len = shutil.get_terminal_size()[0]
+            for name, current, count in m_importer.create_metadata(metadata):
+                if args.verbose:
+                    end = '\n' if current == count else '\r'
+                    print(f'{name} ({current}/{count})'.ljust(line_len), end=end)
+
+        # Import batch
         option_skip_exist_sample = 'skip_exist_sample' in args.option if type(args.option) is list else False
-
-        m_importer = SplashbackImporter(os.environ['SPLASHBACK_API_KEY'], args.pool_id, imports,
-                                        ignore_zero_dups=option_ignore_zero_dups,
-                                        ignore_dups=option_ignore_dups)
-        check_results = m_importer.check()
-        metadata = m_parser.start_metadata_silent(check_results, args)
-
-        line_len = shutil.get_terminal_size()[0]
-        for name, current, count in m_importer.create_metadata(metadata):
-            if args.verbose:
-                end = '\n' if current == count else '\r'
-                print(f'{name} ({current}/{count})'.ljust(line_len), end=end)
-        result = m_importer.run(args.dry_run, option_skip_exist_sample)
+        result = m_importer.run(batch_imports, dry_run=args.dry_run, skip_exist_sample=option_skip_exist_sample)
 
         print(f'Imported {result["imported_sample_count"]} samples,'
               f' {result["imported_variant_count"]} variants and'
-              f' {result["imported_value_count"]} values from {path}')
+              f' {result["imported_value_count"]} values from'
+              f' {",".join([str(path.relative_to(app_dir)) for path in batch_paths])}')
 
 
 if __name__ == '__main__':
@@ -122,6 +159,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--pool-id', type=str,
                         help='Splashback Pool ID to integrate.')
+    parser.add_argument('--batch-size', type=int, default=1000,
+                        help='Number of imports per batch.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Do not publish the data to Splashback.')
     parser.add_argument('-d', '--dir', type=str,
@@ -161,14 +200,14 @@ if __name__ == '__main__':
 
     # Use passed directory
     if args.dir is not None:
-        app_dir = Path(args.dir)
-        if not app_dir.is_dir():
-            raise Exception(f'The given path is not a directory: {app_dir}')
+        args_dir = Path(args.dir)
+        if not args_dir.is_dir():
+            raise Exception(f'The given path is not a directory: {args_dir}')
 
         if args.interactive:
-            main_interactive(app_dir)
+            main_interactive(args_dir)
         else:
-            main_silent(app_dir)
+            main_silent(args_dir)
 
     # Use temporary directory
     else:

@@ -19,8 +19,7 @@ splashback_host = 'https://api.splashback.io'
 
 
 class SplashbackImporter:
-    def __init__(self, api_key: str, pool_id: str, imports: List[ModelImport],
-                 ignore_zero_dups: bool = False, ignore_dups: bool = False):
+    def __init__(self, api_key: str, pool_id: str):
         self._configuration = splashback_data.Configuration(
             host=splashback_host + '/data'
         )
@@ -29,70 +28,15 @@ class SplashbackImporter:
 
         self._pool_id = pool_id
 
-        self._imports = imports
-        if ignore_zero_dups:
-            self._ignore_zero_dups()
-        if ignore_dups:
-            self._ignore_dups()
-
-    @staticmethod
-    def _compare_models(a: ModelImport, b: ModelImport):
-        return a['site_code'] == b['site_code'] \
-               and a['date'] == b['date'] \
-               and a['program'] == b['program'] \
-               and a['variant_type'] == b['variant_type'] \
-               and a['variant_date_time'] == b['variant_date_time'] \
-               and a['variant_value'] == b['variant_value'] \
-               and a['variant_comment'] == b['variant_comment'] \
-               and a['parameter'] == b['parameter']
-
-    def _ignore_zero_dups(self) -> None:
-        def is_zero_model(mdl: ModelImport):
-            return float(mdl['value']) == 0. and float(mdl['variant_value']) == 0.
-
-        zero_dup_idxs = set()
-        for idx_a, mdl_a in enumerate(self.imports):
-            for idx_b, mdl_b in enumerate(self.imports):
-                # Only check previous entries
-                if idx_b >= idx_a:
-                    break
-
-                # Compare
-                if self._compare_models(mdl_a, mdl_b):
-                    if is_zero_model(mdl_a):
-                        zero_dup_idxs.add(idx_a)
-                    if is_zero_model(mdl_b):
-                        zero_dup_idxs.add(idx_b)
-
-        self._imports = [mdl for idx, mdl in enumerate(self.imports) if idx not in zero_dup_idxs]
-
-    def _ignore_dups(self) -> None:
-        dup_idxs = set()
-        for idx_a, mdl_a in enumerate(self.imports):
-            for idx_b, mdl_b in enumerate(self.imports):
-                # Only check previous entries
-                if idx_b >= idx_a:
-                    break
-
-                # Compare
-                if self._compare_models(mdl_a, mdl_b):
-                    dup_idxs.add(idx_b)
-
-        self._imports = [mdl for idx, mdl in enumerate(self.imports) if idx not in dup_idxs]
-
     @property
     def pool_id(self) -> int:
         return int(self._pool_id)
 
-    @property
-    def imports(self) -> List[ModelImport]:
-        return self._imports
-
-    def check(self) -> ImportResults:
+    def check(self, imports: List[ModelImport]) -> ImportResults:
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)
 
-            results: ImportResults = instance.api_imports_check_pool_id_post(model_import=self.imports,
+            results: ImportResults = instance.api_imports_check_pool_id_post(model_import=imports,
                                                                              pool_id=self.pool_id)
 
         return results
@@ -235,8 +179,9 @@ class SplashbackImporter:
                 yield 'quality lookups', lookup_idx + 1, len(quality_lookups)
             # endregion
 
-    def run(self, dry_run: bool = False, skip_exist_sample: bool = False) -> ImportRunResult:
-        results = self.check()
+    def run(self, imports: List[ModelImport],
+            dry_run: bool = False, skip_exist_sample: bool = False) -> ImportRunResult:
+        results = self.check(imports)
 
         # Skip existing samples
         if skip_exist_sample:
@@ -248,8 +193,8 @@ class SplashbackImporter:
                     continue
                 skip_idxs.add(message['index'])
 
-            self._imports = [r for idx, r in enumerate(self.imports) if idx not in skip_idxs]
-            results = self.check()
+            imports = [r for idx, r in enumerate(imports) if idx not in skip_idxs]
+            results = self.check(imports)
 
         # Unhandled error messages
         if results['has_error_message']:
@@ -263,4 +208,4 @@ class SplashbackImporter:
         with splashback_data.ApiClient(self._configuration) as client:
             instance = imports_api.ImportsApi(client)
 
-            return instance.api_imports_run_pool_id_post(model_import=self.imports, pool_id=self.pool_id)
+            return instance.api_imports_run_pool_id_post(model_import=imports, pool_id=self.pool_id)

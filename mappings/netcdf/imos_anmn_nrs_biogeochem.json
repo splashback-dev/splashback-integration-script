@@ -8,7 +8,7 @@
       "time": "",
       "taken_by": "ATTR author !str:30",
       "comment": "",
-      "program": "ATTR station",
+      "program": "CONST IMOS ANMN NRS",
       "variant_type": "CONST depth",
       "variant_date_time": "",
       "variant_value": "VAR DEPTH",

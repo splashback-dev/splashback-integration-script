@@ -111,13 +111,73 @@ class BaseParser:
         self._imports: List[ModelImport] = []
 
     def start_interactive(self) -> List[ModelImport]:
+        return self._start_interactive()
+
+    def _start_interactive(self) -> List[ModelImport]:
         raise NotImplementedError()
 
     def start_silent(self, args: Namespace) -> List[ModelImport]:
+        ignore_zero_dups = 'ignore_zero_dups' in args.option if type(args.option) is list else False
+        ignore_dups = 'ignore_dups' in args.option if type(args.option) is list else False
+
+        self._imports = self._start_silent(args)
+        if ignore_zero_dups:
+            self._ignore_zero_dups()
+        if ignore_dups:
+            self._ignore_dups()
+        return self._imports
+
+    def _start_silent(self, args: Namespace) -> List[ModelImport]:
         raise NotImplementedError()
 
-    def start_metadata_interactive(self, results: ImportResults) -> ParsedMetadata:
+    def start_metadata_interactive(self, results: ImportResults, metadata: ParsedMetadata = None) -> ParsedMetadata:
         raise NotImplementedError()
 
-    def start_metadata_silent(self, results: ImportResults, args: Namespace) -> ParsedMetadata:
+    def start_metadata_silent(self, results: ImportResults, args: Namespace, metadata: ParsedMetadata = None) \
+            -> ParsedMetadata:
         raise NotImplementedError()
+
+    @staticmethod
+    def _compare_models(a: ModelImport, b: ModelImport):
+        return a['site_code'] == b['site_code'] \
+               and a['date'] == b['date'] \
+               and a['program'] == b['program'] \
+               and a['variant_type'] == b['variant_type'] \
+               and a['variant_date_time'] == b['variant_date_time'] \
+               and a['variant_value'] == b['variant_value'] \
+               and a['variant_comment'] == b['variant_comment'] \
+               and a['parameter'] == b['parameter']
+
+    def _ignore_zero_dups(self) -> None:
+        def is_zero_model(mdl: ModelImport):
+            return float(mdl['value']) == 0. and float(mdl['variant_value']) == 0.
+
+        zero_dup_idxs = set()
+        for idx_a, mdl_a in enumerate(self._imports):
+            for idx_b, mdl_b in enumerate(self._imports):
+                # Only check previous entries
+                if idx_b >= idx_a:
+                    break
+
+                # Compare
+                if self._compare_models(mdl_a, mdl_b):
+                    if is_zero_model(mdl_a):
+                        zero_dup_idxs.add(idx_a)
+                    if is_zero_model(mdl_b):
+                        zero_dup_idxs.add(idx_b)
+
+        self._imports = [mdl for idx, mdl in enumerate(self._imports) if idx not in zero_dup_idxs]
+
+    def _ignore_dups(self) -> None:
+        dup_idxs = set()
+        for idx_a, mdl_a in enumerate(self._imports):
+            for idx_b, mdl_b in enumerate(self._imports):
+                # Only check previous entries
+                if idx_b >= idx_a:
+                    break
+
+                # Compare
+                if self._compare_models(mdl_a, mdl_b):
+                    dup_idxs.add(idx_b)
+
+        self._imports = [mdl for idx, mdl in enumerate(self._imports) if idx not in dup_idxs]

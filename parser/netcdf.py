@@ -30,7 +30,7 @@ class NetcdfParser(BaseParser):
         self._dataset = Dataset(path, 'r')
         self._mapping = {}
 
-    def start_silent(self, args: Namespace) -> List[ModelImport]:
+    def _start_silent(self, args: Namespace) -> List[ModelImport]:
         # Read mapping file
         with open(args.netcdf_mapping, 'r') as m:
             self._mapping = json.load(m)
@@ -44,8 +44,10 @@ class NetcdfParser(BaseParser):
         self._imports = [r for r in self._parse_imports()]
         return self._imports
 
-    def start_metadata_silent(self, results: ImportResults, args: Namespace) -> ParsedMetadata:
-        metadata = ParsedMetadata()
+    def start_metadata_silent(self, results: ImportResults, args: Namespace, metadata: ParsedMetadata = None) \
+            -> ParsedMetadata:
+        if metadata is None:
+            metadata = ParsedMetadata()
 
         for message in results['messages']:
             # Filter status
