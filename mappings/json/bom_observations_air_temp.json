@@ -1,0 +1,48 @@
+{
+  "@@request_url": "http://www.bom.gov.au/fwo/IDW60801/IDW60801.94802.json",
+  "import_path": "observations.data",
+  "templates": {
+    "import": {
+      "site_name": "",
+      "site_code": "JSON observations.header.0.ID",
+      "date": "JSON $.local_date_time_full !datetime:bom_date_time_full:json",
+      "time": "",
+      "taken_by": "",
+      "comment": "JSON $.cloud",
+      "program": "JSON observations.header.0.product_name",
+      "variant_type": "",
+      "variant_date_time": "",
+      "variant_value": "",
+      "variant_comment": "",
+      "parameter": "CONST Air Temperature",
+      "qualifier": "",
+      "value": "JSON $.air_temp",
+      "quality": "CONST NR",
+      "laboratory": "CONST BOM",
+      "sampling_method": "CONST Weather Station"
+    },
+    "site": {
+      "name": "JSON observations.header.0.ID",
+      "location": "JSON observations.header.0.name",
+      "latitude": "JSON observations.data.0.lat !float",
+      "longitude": "JSON observations.data.0.lon !float"
+    },
+    "program": {
+      "name": "JSON observations.header.0.product_name"
+    },
+    "parameter": {
+      "name": "CONST Air Temperature",
+      "short_name": "CONST Air Temp",
+      "unit": "CONST °C"
+    },
+    "laboratory": {
+      "name": "CONST BOM"
+    },
+    "sampling_method": {
+      "name": "CONST Weather Station"
+    },
+    "quality": {
+      "name": "CONST NR"
+    }
+  }
+}

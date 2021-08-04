@@ -6,12 +6,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Type
 
+from dotenv import load_dotenv
 from splashback_data.model.import_results import ImportResults
 from splashback_data.model.model_import import ModelImport
 
 from finder import BaseFinder
+from finder.request import RequestFinder
 from finder.thredds import ThreddsFinder
 from parser import BaseParser
+from parser.json import JsonParser
 from parser.netcdf import NetcdfParser
 from splashback import SplashbackImporter
 
@@ -73,6 +76,8 @@ def main_interactive(app_dir: Path) -> None:
 def main_silent(app_dir: Path) -> None:
     if args.finder == 'thredds':
         m_finder = ThreddsFinder(app_dir)
+    elif args.finder == 'request':
+        m_finder = RequestFinder(app_dir)
     else:
         raise Exception(f'Unknown finder: {args.finder}')
 
@@ -99,6 +104,8 @@ def main_silent(app_dir: Path) -> None:
         for path in paths:
             if args.parser == 'netcdf':
                 m_parser = NetcdfParser(path)
+            elif args.parser == 'json':
+                m_parser = JsonParser(path)
             else:
                 raise Exception(f'Unknown parser: {args.parser}')
 
@@ -117,6 +124,9 @@ def main_silent(app_dir: Path) -> None:
         # Remove batched paths
         paths = paths[len(batch_paths):]
 
+        if args.verbose:
+            print(f'Completed batch: {batch_imports}')
+
         # Check batch
         check_results = m_importer.check(batch_imports)
 
@@ -128,7 +138,7 @@ def main_silent(app_dir: Path) -> None:
             m_messages = [m for m in check_results['messages'] if m_start_idx <= m['index'] < m_end_idx]
             for m in m_messages:
                 m['index'] -= m_start_idx
-            m_check_results = ImportResults(messages=m_messages)
+            m_check_results = ImportResults._from_openapi_data(messages=m_messages)
             metadata = m_parser.start_metadata_silent(m_check_results, args, metadata=metadata)
 
         if metadata is not None:
@@ -167,9 +177,11 @@ if __name__ == '__main__':
                         help='Directory to store data. If unspecified a temporary directory will be used.')
     parser.add_argument('--start-path', type=str,
                         help='Path to start importing from. Useful if an import was interrupted and should be resumed.')
-    parser.add_argument('-f', '--finder', type=str, choices=['thredds'],
+    # Add valid finder choices here
+    parser.add_argument('-f', '--finder', type=str, choices=['thredds', 'request'],
                         help='Finder to locate and fetch data.')
-    parser.add_argument('-p', '--parser', type=str, choices=['netcdf'],
+    # Add valid parser choices here
+    parser.add_argument('-p', '--parser', type=str, choices=['netcdf', 'json'],
                         help='Parser to read fetched data.')
     parser.add_argument('-o', '--option', type=str, action='append',
                         choices=['ignore_zero_dups', 'ignore_dups', 'skip_exist_sample'],
@@ -188,6 +200,11 @@ if __name__ == '__main__':
                               help='Enable pattern matching for THREDDS Dataset ID.')
     parser_group.add_argument('--thredds-service', type=str, required=is_finder_thredds,
                               help='THREDDS Service name to use for dataset download.')
+    is_finder_request = not current_args.interactive and current_args.finder == 'request'
+    parser_group = parser.add_argument_group(title='Finder: request',
+                                             description='Make a web API request.')
+    parser_group.add_argument('--request-url', type=str, required=is_finder_request,
+                              help='URL to make the web API request to.')
 
     # Add parsers
     is_parser_netcdf = not current_args.interactive and current_args.parser == 'netcdf'
@@ -195,8 +212,16 @@ if __name__ == '__main__':
                                              description='Read NetCDF files.')
     parser_group.add_argument('--netcdf-mapping', type=str, required=is_parser_netcdf,
                               help='Field mapping file for the NetCDF parser.')
+    is_parser_json = not current_args.interactive and current_args.parser == 'json'
+    parser_group = parser.add_argument_group(title='Parser: json',
+                                             description='Read JSON files.')
+    parser_group.add_argument('--json-mapping', type=str, required=is_parser_json,
+                              help='Field mapping file for the JSON parser.')
 
     args = parser.parse_args()
+
+    # Load .env file
+    load_dotenv()
 
     # Use passed directory
     if args.dir is not None:

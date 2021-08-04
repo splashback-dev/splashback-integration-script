@@ -42,6 +42,8 @@ class SplashbackImporter:
         return results
 
     def create_metadata(self, metadata: ParsedMetadata) -> Generator[Tuple[str, int, int], None, None]:
+        # TODO: Create endpoints do not return metadata pre-v2 Splashback!
+
         with splashback_data.ApiClient(self._configuration) as client:
             # region Sites
             site_instance = sites_api.SitesApi(client)
